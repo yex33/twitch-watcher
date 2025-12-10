@@ -53,19 +53,29 @@ var browserConfig = {
     '--no-zygote',
     '--disable-gpu',
     '--no-sandbox',
-    '--disable-setuid-sandbox'
-  ]
+    '--disable-setuid-sandbox',
+    // For maximum memory savings
+    '--disable-web-security',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--blink-settings=imagesEnabled=false' // Disable images to save data/memory
+  ],
+  // Reduce the initial rendering load
+  defaultViewport: {
+    width: 600,
+    height: 800
+  }
 }; //https://github.com/D3vl0per/Valorant-watcher/issues/24
 
 const cookiePolicyQuery = 'button[data-a-target="consent-banner-accept"]';
 const matureContentQuery = 'button[data-a-target="player-overlay-mature-accept"]';
 const oldChannelsQuery ='a[data-a-target="preview-card-image-link"]';
-const channelsQuery = 'div[class="Layout-sc-1xcs6mc-0 jCGmCy"] > a[class="ScCoreLink-sc-16kq0mq-0 eFqEFL tw-link"]';
+const channelsQuery = 'div[class="ScTextWrapper-sc-10mto54-1 fzKxJT"] > a[class="ScCoreLink-sc-16kq0mq-0 fytYW preview-card-channel-link tw-link"]';
 const streamPauseQuery = 'button[data-a-target="player-play-pause-button"]';
-const streamSettingsQuery = '[data-a-target="player-settings-button"]';
+const collapseChatQuery = 'button[aria-label="Collapse Chat"]';
+const streamSettingsQuery = 'div[class="Layout-sc-1xcs6mc-0 video-ref"] button[data-a-target="player-settings-button"]';
 const streamQualitySettingQuery = '[data-a-target="player-settings-menu-item-quality"]';
 const streamQualityQuery = 'input[data-a-target="tw-radio"]';
-const campaignInProgressDropClaimQuery = '[data-test-selector="DropsCampaignInProgressRewardPresentation-claim-button"]';
+const campaignInProgressDropClaimQuery = '//button[.//div[text()="Claim Now"]]';
 
 // ========================================== CONFIG SECTION =================================================================
 
@@ -131,8 +141,8 @@ async function viewRandomPage(browser, page) {
           console.log('🔧 Setting lowest possible resolution..');
           await clickWhenExist(page, streamPauseQuery);
 
+          await clickWhenExist(page, collapseChatQuery);
           await clickWhenExist(page, streamSettingsQuery);
-          await page.waitFor(streamQualitySettingQuery);
 
           await clickWhenExist(page, streamQualitySettingQuery);
           await page.waitFor(streamQualityQuery);
@@ -145,7 +155,7 @@ async function viewRandomPage(browser, page) {
 
           await clickWhenExist(page, streamPauseQuery);
 
-          await page.keyboard.press('m'); //For unmute
+          // await page.keyboard.press('m'); //For unmute
           firstRun = false;
         }
 
@@ -182,18 +192,20 @@ async function claimDropsIfAny(page) {
     "waitUntil": "networkidle0"
   }); //https://github.com/puppeteer/puppeteer/blob/master/docs/api.md#pagegobackoptions
 
-  var claimDrops = await queryOnWebsite(page, campaignInProgressDropClaimQuery);
-  if (claimDrops.length > 0) {
-    console.log(`🔎 ${claimDrops.length} drop(s) found!`);
-    for (var i = 0; i < claimDrops.length; i++) {
-      await clickWhenExist(page, campaignInProgressDropClaimQuery, 2); // Claim drop X times based on how many drops are available
+  var claimableDrops = await page.$x(campaignInProgressDropClaimQuery);
+  if (claimableDrops.length > 0) {
+    console.log(`🔎 ${claimableDrops.length} drop(s) found!`);
+    for (const drop of claimableDrops) {
+      await page.waitFor(5000);
+      await drop.click();
+      await page.waitFor(5000);
     }
-    var dropsStillLeft = await queryOnWebsite(page, campaignInProgressDropClaimQuery);
-    if (dropsStillLeft.length > 0) {
-      console.log(`Something went wrong, ${dropsStillLeft.length} drop(s) unclaimed.`);
+    var dropsLeft = await page.$x(campaignInProgressDropClaimQuery);
+    if (dropsLeft.length > 0) {
+      console.log(`Something went wrong, ${dropsLeft.length} drop(s) unclaimed.`);
     }
     else {
-      console.log(`✅ ${claimDrops.length} drop(s) claimed!`);
+      console.log(`✅ ${claimableDrops.length} drop(s) claimed!`);
     }
   }
 }
@@ -211,48 +223,31 @@ async function readLoginData() {
     "storeId": "0",
     "id": 1
   }];
-  try {
-    console.log('🔎 Checking config file...');
+  console.log('🔎 Checking environment token...');
 
-    if (fs.existsSync(configPath)) {
-      console.log('✅ Json config found!');
+  if (process.env.token) {
+    console.log('✅ Token found in environment variables.');
 
-      let configFile = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    if (proxy) browserConfig.args.push('--proxy-server=' + proxy);
 
-      if (proxy) browserConfig.args.push('--proxy-server=' + proxy);
-      browserConfig.executablePath = configFile.exec;
-      cookie[0].value = configFile.token;
+    // Set executablePath for the Chromium installed in the Docker container
+    browserConfig.executablePath = '/usr/bin/chromium'; 
+    cookie[0].value = process.env.token;
 
-      return cookie;
-    } else if (process.env.token) {
-      console.log('✅ Env config found');
+    return cookie;
+  } else if (fs.existsSync(configPath)) {
+    // Keep local config reading for local runs if you need it
+    console.log('✅ Json config found locally!');
 
-      if (proxy) browserConfig.args.push('--proxy-server=' + proxy);
-      cookie[0].value = process.env.token; //Set cookie from env
-      browserConfig.executablePath = '/usr/bin/chromium-browser'; //For docker container
-      // For testing in Windows
-      // browserConfig.executablePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-      return cookie;
-    } else {
-      console.log('❌ No config file found!');
+    let configFile = JSON.parse(fs.readFileSync(configPath, 'utf8'))
 
-      let input = await inquirer.askLogin();
+    if (proxy) browserConfig.args.push('--proxy-server=' + proxy);
+    browserConfig.executablePath = configFile.exec;
+    cookie[0].value = configFile.token;
 
-      fs.writeFile(configPath, JSON.stringify(input), function (err) {
-        if (err) {
-          console.log(err);
-        }
-      });
-
-      if (proxy) browserConfig.args[6] = '--proxy-server=' + proxy;
-      browserConfig.executablePath = input.exec;
-      cookie[0].value = input.token;
-
-      return cookie;
-    }
-  } catch (err) {
-    console.log('🤬 Error: ', e);
-    console.log('Please visit my discord channel to solve this problem: https://discord.gg/s8AH4aZ');
+    return cookie;
+  } else {
+    console.log('❌ No token found! Prompting for input...');
   }
 }
 
@@ -367,13 +362,13 @@ async function clickWhenExist(page, query, clickCount = 1) {
   let result = await queryOnWebsite(page, query);
 
   try {
-    if (result[0].type == 'tag' && result[0].name == 'button') {
-      await page.click(query, {delay: 50, clickCount});
-      await page.waitFor(500);
-      return;
-    }
+    await page.waitForSelector(query, { visible: true, timeout: 5000 });
+    await page.click(query, {delay: 500, clickCount});
+    await page.waitFor(500);
+    return true;
   } catch (e) { 
     console.log(`Failed to click on query: ${query}, ${e.message}`)
+    return false
   }
 }
 
