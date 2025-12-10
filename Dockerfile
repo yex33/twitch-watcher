@@ -1,4 +1,4 @@
-FROM node:13-alpine
+FROM node:20-alpine
 LABEL maintainer frosty5689 <frosty5689@gmail.com>
 
 RUN apk add --no-cache --update \
